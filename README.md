@@ -39,9 +39,3 @@ GPU anomaly detection on a synthetic NVIDIA DGX Cloud fleet:
 - Claude Code + Databricks CLI authenticated
 - SQL Warehouse running
 - ML Runtime 15.4+ cluster (for MLflow notebooks)
-
-## Docs
-
-- [WORKSHOP_PLAN.md](WORKSHOP_PLAN.md) - Full day agenda, notebook details, slide outline
-- [DEMO_SCRIPT.md](DEMO_SCRIPT.md) - Minute-by-minute run-of-show with talking points
-- [MLOPS_SLIDES_SOURCE_MAP.md](MLOPS_SLIDES_SOURCE_MAP.md) - Which slides to copy from source decks
