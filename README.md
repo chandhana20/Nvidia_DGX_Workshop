@@ -6,12 +6,11 @@
 
 | Time | Block | Type |
 |------|-------|------|
-| 9:00 - 9:20 | Setup & Data Exploration | Hands-on |
-| 9:20 - 10:00 | ML Lecture (9 slides) | Lecture |
-| 10:15 - 11:45 | ML Labs: Features, Training, Serving, Monitoring | Hands-on |
-| 12:45 - 1:00 | GenAI Lecture (2 slides) | Lecture |
-| 1:00 - 3:30 | AI Labs: AI Functions, Genie, RAG, Apps, Agents | Hands-on |
-| 3:30 - 4:00 | E2E Demo + Wrap-Up | Demo |
+| 9:00 - 12:00 | ML Labs: Features, Training, Serving, Monitoring | Lecture + Hands-on |
+| 12:00 - 1:00 | Lunch | Break |
+| 1:00 - 2:00 | GenAI Lecture | Lecture |
+| 2:00 - 4:00 | AI Labs: AI Functions, Genie, RAG, Apps, Agents | Hands-on |
+| 4:00 - 5:00 | Wrap-Up & Next Steps | Demo + Q&A |
 
 ## Notebooks
 
