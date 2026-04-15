@@ -1,43 +1,22 @@
 # Databricks notebook source
 
 # MAGIC %md
-# MAGIC # Block 4: Vector Search, RAG & Knowledge Assistants
-# MAGIC **NVIDIA DGX Cloud MLOps & GenAI Workshop**
-# MAGIC
-# MAGIC | Duration | Focus Area |
-# MAGIC |----------|-----------|
-# MAGIC | 50 min | Hands-on lab |
+# MAGIC # Vector Search, RAG & Knowledge Assistants
+# MAGIC *Build a retrieval-augmented operations advisor for DGX Cloud fleets.*
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ## Learning Objectives
-# MAGIC
-# MAGIC By the end of this notebook you will be able to:
-# MAGIC
-# MAGIC 1. **Create a Vector Search endpoint** and Delta Sync index on GPU operations documentation
-# MAGIC 2. **Perform similarity search** against your indexed documents
-# MAGIC 3. **Build a Knowledge Assistant** ("GPU Operations Advisor") backed by your document volume
-# MAGIC 4. **Create a Multi-Agent Supervisor** ("DGX Operations Center") that routes queries to the right tool
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC ## Prerequisites
-# MAGIC
-# MAGIC - A Databricks workspace with Unity Catalog enabled
-# MAGIC - Access to Foundation Model APIs (for embeddings)
-# MAGIC - Catalog `main` and schema `mlops_genai_workshop` created (from Notebook 01)
+# MAGIC - Create a Vector Search endpoint and Delta Sync index over GPU runbook PDFs
+# MAGIC - Stand up a Knowledge Assistant ("GPU Operations Advisor") backed by a UC Volume
+# MAGIC - Wire both into a Multi-Agent Supervisor ("DGX Operations Center") that routes queries
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Part A -- Vector Search Setup (15 min)
+# MAGIC ## Part A: Vector Search Setup
 # MAGIC
-# MAGIC We will:
-# MAGIC 1. Generate synthetic GPU runbook PDFs and upload them to a UC Volume
-# MAGIC 2. Parse the PDFs into a Delta table with chunked text
-# MAGIC 3. Create a Vector Search endpoint
-# MAGIC 4. Create a Delta Sync index with `databricks-gte-large-en` embeddings
-# MAGIC 5. Query the index with similarity search
+# MAGIC Generate synthetic GPU runbook PDFs, chunk them into a Delta table, create a
+# MAGIC Vector Search endpoint and Delta Sync index, then run similarity queries.
 
 # COMMAND ----------
 
@@ -46,12 +25,10 @@
 
 # COMMAND ----------
 
-# Workshop configuration
 CATALOG = "main"
 SCHEMA = "mlops_genai_workshop"
 VOLUME = "docs"
 
-# Vector Search settings
 VS_ENDPOINT_NAME = "dgx_workshop_vs_endpoint"
 VS_INDEX_NAME = f"{CATALOG}.{SCHEMA}.gpu_runbook_index"
 SOURCE_TABLE = f"{CATALOG}.{SCHEMA}.gpu_runbook_chunks"
@@ -60,21 +37,18 @@ EMBEDDING_MODEL = "databricks-gte-large-en"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 2: Create the Volume and Generate Synthetic GPU Runbook PDFs
+# MAGIC ### Step 2: Create Volume and Generate Synthetic GPU Runbook PDFs
 # MAGIC
-# MAGIC In a real engagement you would upload actual GPU runbook PDFs via the UI or CLI.
-# MAGIC Here we generate synthetic documents so the workshop is self-contained.
+# MAGIC In production you would upload real runbooks. Here we generate synthetic documents
+# MAGIC so the workshop is self-contained.
 
 # COMMAND ----------
 
-# Ensure schema and volume exist
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA}.{VOLUME}")
 
 # COMMAND ----------
 
-# Generate synthetic GPU runbook PDFs
-# Install fpdf2 for PDF generation (lightweight, pure-Python)
 %pip install fpdf2 --quiet
 dbutils.library.restartPython()
 
@@ -89,7 +63,7 @@ VOLUME = "docs"
 
 VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 
-# Define synthetic runbook content
+# Synthetic runbook content -- thermal management, memory diagnostics, SLA
 runbooks = {
     "GPU_Thermal_Management_Runbook.pdf": [
         ("GPU Thermal Management Runbook", ""),
@@ -227,16 +201,15 @@ print(f"\nAll runbook PDFs written to {VOLUME_PATH}")
 
 # COMMAND ----------
 
-# Verify the uploaded files
 display(dbutils.fs.ls(f"dbfs:{VOLUME_PATH}"))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 3: Parse PDFs into a Delta Table with Chunked Text
+# MAGIC ### Step 3: Parse PDFs into a Chunked Delta Table
 # MAGIC
-# MAGIC Vector Search requires a Delta table as source. We parse each PDF, split the text
-# MAGIC into manageable chunks, and write to a Delta table.
+# MAGIC Vector Search requires a Delta table as its source. We extract text from each PDF,
+# MAGIC split into overlapping chunks, and write the result.
 
 # COMMAND ----------
 
@@ -254,7 +227,7 @@ VOLUME = "docs"
 VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
 SOURCE_TABLE = f"{CATALOG}.{SCHEMA}.gpu_runbook_chunks"
 
-CHUNK_SIZE = 800  # characters per chunk
+CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 
 
@@ -278,7 +251,6 @@ def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
     return chunks
 
 
-# Process all PDFs in the volume
 rows = []
 chunk_id = 0
 for filename in os.listdir(VOLUME_PATH):
@@ -310,7 +282,6 @@ schema = StructType([
 
 df = spark.createDataFrame(rows, schema=schema)
 
-# Enable Change Data Feed (required for Delta Sync indexes)
 df.write.format("delta") \
     .mode("overwrite") \
     .option("overwriteSchema", "true") \
@@ -325,7 +296,7 @@ print(f"\nSource table '{SOURCE_TABLE}' created with {df.count()} chunks")
 # MAGIC %md
 # MAGIC ### Step 4: Create a Vector Search Endpoint
 # MAGIC
-# MAGIC A Vector Search **endpoint** is the compute resource that hosts your indexes.
+# MAGIC The endpoint is the compute resource that hosts your indexes.
 
 # COMMAND ----------
 
@@ -337,7 +308,6 @@ w = WorkspaceClient()
 
 VS_ENDPOINT_NAME = "dgx_workshop_vs_endpoint"
 
-# Check if endpoint already exists
 existing_endpoints = [ep.name for ep in w.vector_search_endpoints.list_endpoints()]
 
 if VS_ENDPOINT_NAME not in existing_endpoints:
@@ -373,9 +343,8 @@ while True:
 # MAGIC %md
 # MAGIC ### Step 5: Create a Delta Sync Index
 # MAGIC
-# MAGIC A **Delta Sync** index automatically keeps the vector index in sync with
-# MAGIC the source Delta table. We use the `databricks-gte-large-en` embedding model
-# MAGIC hosted on Foundation Model APIs.
+# MAGIC Delta Sync keeps the vector index in sync with the source table automatically.
+# MAGIC We use the `databricks-gte-large-en` embedding model from Foundation Model APIs.
 
 # COMMAND ----------
 
@@ -389,7 +358,6 @@ VS_INDEX_NAME = f"{CATALOG}.{SCHEMA}.gpu_runbook_index"
 SOURCE_TABLE = f"{CATALOG}.{SCHEMA}.gpu_runbook_chunks"
 EMBEDDING_MODEL = "databricks-gte-large-en"
 
-# Check if index already exists
 existing_indexes = [
     idx.name for idx in w.vector_search_indexes.list_indexes(name=VS_ENDPOINT_NAME)
 ]
@@ -418,9 +386,8 @@ else:
 
 # COMMAND ----------
 
-# Poll until the index is ONLINE
+# Poll until the index is ONLINE (may take 5-10 min while embeddings compute)
 print(f"Waiting for index '{VS_INDEX_NAME}' to become ONLINE ...")
-print("(This may take 5-10 minutes while embeddings are computed.)\n")
 
 while True:
     idx = w.vector_search_indexes.get_index(index_name=VS_INDEX_NAME)
@@ -439,11 +406,10 @@ while True:
 # MAGIC %md
 # MAGIC ### Step 6: Query the Vector Search Index
 # MAGIC
-# MAGIC Now let's test similarity search against our GPU runbook documents.
+# MAGIC Run similarity searches against the GPU runbook documents.
 
 # COMMAND ----------
 
-# Similarity search
 results = w.vector_search_indexes.query_index(
     index_name=VS_INDEX_NAME,
     columns=["chunk_id", "doc_name", "content"],
@@ -452,17 +418,14 @@ results = w.vector_search_indexes.query_index(
 )
 
 print("Query: 'What should I do when GPU temperature exceeds 85 degrees?'\n")
-print("=" * 80)
 for row in results.result.data_array:
     chunk_id, doc_name, content = row[0], row[1], row[2]
-    print(f"\n[{doc_name}] (chunk {chunk_id})")
-    print("-" * 40)
+    print(f"[{doc_name}] (chunk {chunk_id})")
     print(content[:500])
     print()
 
 # COMMAND ----------
 
-# Try another query
 results = w.vector_search_indexes.query_index(
     index_name=VS_INDEX_NAME,
     columns=["chunk_id", "doc_name", "content"],
@@ -471,27 +434,24 @@ results = w.vector_search_indexes.query_index(
 )
 
 print("Query: 'ECC memory error diagnosis A100'\n")
-print("=" * 80)
 for row in results.result.data_array:
     chunk_id, doc_name, content = row[0], row[1], row[2]
-    print(f"\n[{doc_name}] (chunk {chunk_id})")
-    print("-" * 40)
+    print(f"[{doc_name}] (chunk {chunk_id})")
     print(content[:500])
     print()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC # Part B -- Knowledge Assistant (20 min)
+# MAGIC Part A complete. Vector Search gives you full control over chunking and embedding; Part B shows how Knowledge Assistants abstract that away into a managed experience.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Part B: Knowledge Assistant
 # MAGIC
-# MAGIC We will create a **Knowledge Assistant** ("GPU Operations Advisor") that uses
-# MAGIC our GPU runbook volume as its knowledge source. The KA handles document Q&A
-# MAGIC natively -- no manual chunking or embedding setup required (it uses managed RAG).
-# MAGIC
-# MAGIC > **Note:** Knowledge Assistants use UC Volumes directly as a knowledge source.
-# MAGIC > The Vector Search index we built in Part A is a great learning exercise;
-# MAGIC > the KA in Part B shows how Databricks simplifies this into a managed experience.
+# MAGIC Create a Knowledge Assistant ("GPU Operations Advisor") that uses the UC Volume
+# MAGIC directly as its knowledge source -- no manual chunking or embedding required.
 
 # COMMAND ----------
 
@@ -501,10 +461,7 @@ for row in results.result.data_array:
 # COMMAND ----------
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import (
-    App,
-)
-import time
+import time, requests, json
 
 w = WorkspaceClient()
 
@@ -512,9 +469,6 @@ CATALOG = "main"
 SCHEMA = "mlops_genai_workshop"
 VOLUME = "docs"
 
-# -------------------------------------------------------------------
-# PARTICIPANT TODO: After creation, fill in the KA name if different
-# -------------------------------------------------------------------
 KA_NAME = "gpu-operations-advisor"
 KA_DISPLAY_NAME = "GPU Operations Advisor"
 
@@ -527,30 +481,12 @@ KA_INSTRUCTIONS = (
 
 # COMMAND ----------
 
-# Create the Knowledge Assistant using the Databricks SDK
-# Knowledge Assistants are managed via the serving endpoints / apps API
-
-from databricks.sdk.service.apps import (
-    App,
-    AppResource,
-    AppResourceServingEndpoint,
-)
-
-# --- Create Knowledge Assistant via the AI/BI or Agent API ---
-# Note: The exact SDK method depends on your workspace version.
-# Below is the pattern using the Databricks REST API for KA creation.
-
-import requests
-import json
-
-# Get the workspace URL and token from the Workspace Client
 host = w.config.host
 headers = {
     "Authorization": f"Bearer {w.config.token}",
     "Content-Type": "application/json",
 }
 
-# Knowledge Assistant creation payload
 ka_payload = {
     "display_name": KA_DISPLAY_NAME,
     "name": KA_NAME,
@@ -568,7 +504,6 @@ ka_payload = {
     ],
 }
 
-# Create the Knowledge Assistant
 response = requests.post(
     f"{host}/api/2.0/knowledge-assistants",
     headers=headers,
@@ -577,12 +512,11 @@ response = requests.post(
 
 if response.status_code == 200:
     ka_result = response.json()
-    print(f"Knowledge Assistant created successfully!")
+    print("Knowledge Assistant created successfully!")
     print(json.dumps(ka_result, indent=2))
     KA_ID = ka_result.get("id", "")
 elif response.status_code == 409:
     print(f"Knowledge Assistant '{KA_NAME}' already exists. Fetching details...")
-    # List existing KAs to get the ID
     list_resp = requests.get(
         f"{host}/api/2.0/knowledge-assistants",
         headers=headers,
@@ -596,7 +530,7 @@ elif response.status_code == 409:
 else:
     print(f"Error creating KA: {response.status_code}")
     print(response.text)
-    print("\n--- Alternative: Create via UI ---")
+    print(f"\n--- Alternative: Create via UI ---")
     print(f"1. Navigate to: {host}/ml/knowledge-assistants")
     print(f"2. Click 'Create Knowledge Assistant'")
     print(f"3. Name: '{KA_DISPLAY_NAME}'")
@@ -609,12 +543,10 @@ else:
 # MAGIC %md
 # MAGIC ### Step 2: Wait for the Knowledge Assistant to be Ready
 # MAGIC
-# MAGIC The KA needs to ingest and index the documents from the volume. This typically
-# MAGIC takes a few minutes.
+# MAGIC The KA needs to ingest and index the volume documents. This typically takes a few minutes.
 
 # COMMAND ----------
 
-# Poll until KA is ready
 if KA_ID and KA_ID != "<FILL_IN_AFTER_MANUAL_CREATION>":
     print(f"Waiting for Knowledge Assistant '{KA_NAME}' to be ready ...")
 
@@ -644,8 +576,6 @@ else:
 
 # MAGIC %md
 # MAGIC ### Step 3: Test the Knowledge Assistant
-# MAGIC
-# MAGIC Let's ask our GPU Operations Advisor the three test questions.
 
 # COMMAND ----------
 
@@ -665,7 +595,6 @@ def ask_knowledge_assistant(question, ka_id=KA_ID):
         answer = result.get("choices", [{}])[0].get("message", {}).get("content", "No response")
         print(f"A: {answer}")
 
-        # Show sources if available
         sources = result.get("choices", [{}])[0].get("message", {}).get("context", {}).get("documents", [])
         if sources:
             print(f"\nSources:")
@@ -679,21 +608,18 @@ def ask_knowledge_assistant(question, ka_id=KA_ID):
 
 # COMMAND ----------
 
-# Test Question 1
 ask_knowledge_assistant(
     "What is the recommended procedure when GPU temperature exceeds 85C?"
 )
 
 # COMMAND ----------
 
-# Test Question 2
 ask_knowledge_assistant(
     "How do I diagnose ECC memory errors on A100 GPUs?"
 )
 
 # COMMAND ----------
 
-# Test Question 3
 ask_knowledge_assistant(
     "What are the SLA requirements for DGX Cloud GPU availability?"
 )
@@ -701,41 +627,28 @@ ask_knowledge_assistant(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC # Part C -- Multi-Agent Supervisor (15 min)
+# MAGIC ## Part C: Multi-Agent Supervisor
 # MAGIC
-# MAGIC Now we bring it all together with a **Multi-Agent Supervisor (MAS)** called
-# MAGIC "DGX Operations Center". This supervisor routes incoming queries to the
-# MAGIC appropriate tool:
+# MAGIC The "DGX Operations Center" supervisor routes queries to the right tool:
 # MAGIC
 # MAGIC | Tool | Type | Purpose |
 # MAGIC |------|------|---------|
-# MAGIC | DGX Fleet Analytics | Genie Space | Query structured fleet telemetry data via SQL |
+# MAGIC | DGX Fleet Analytics | Genie Space | Query structured fleet telemetry via SQL |
 # MAGIC | GPU Operations Advisor | Knowledge Assistant | Answer questions from GPU runbook documents |
-# MAGIC
-# MAGIC The supervisor decides which tool to invoke based on the nature of the question.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Step 1: Configuration
 # MAGIC
-# MAGIC Fill in the IDs from your previous work. The Genie Space should have been
-# MAGIC created in Notebook 02 (DGX Fleet Analytics).
+# MAGIC Fill in the Genie Space ID from Notebook 02 (DGX Fleet Analytics).
 
 # COMMAND ----------
 
-# -------------------------------------------------------------------
-# PARTICIPANT TODO: Fill in these values from your workspace
-# -------------------------------------------------------------------
+# PARTICIPANT TODO: fill in your Genie Space ID from Notebook 02
+GENIE_SPACE_ID = "<FILL_IN_YOUR_GENIE_SPACE_ID>"
 
-# From Notebook 02 -- Genie Space for structured fleet data
-GENIE_SPACE_ID = "<FILL_IN_YOUR_GENIE_SPACE_ID>"  # e.g., "01f23abc..."
-
-# From Part B above -- Knowledge Assistant for runbook Q&A
-KA_NAME_FOR_MAS = KA_NAME  # "gpu-operations-advisor"
-
-# Multi-Agent Supervisor settings
+KA_NAME_FOR_MAS = KA_NAME
 MAS_NAME = "dgx-operations-center"
 MAS_DISPLAY_NAME = "DGX Operations Center"
 
@@ -750,7 +663,6 @@ print(f"MAS Name: {MAS_NAME}")
 
 # COMMAND ----------
 
-# Multi-Agent Supervisor creation payload
 mas_payload = {
     "display_name": MAS_DISPLAY_NAME,
     "name": MAS_NAME,
@@ -802,7 +714,6 @@ mas_payload = {
     ],
 }
 
-# Create the Multi-Agent Supervisor
 response = requests.post(
     f"{host}/api/2.0/multi-agent-supervisors",
     headers=headers,
@@ -838,7 +749,6 @@ else:
 
 # COMMAND ----------
 
-# Wait for MAS to be ready
 if MAS_ID and MAS_ID != "<FILL_IN_AFTER_MANUAL_CREATION>":
     print(f"Waiting for MAS '{MAS_NAME}' to be ready ...")
 
@@ -869,7 +779,7 @@ else:
 # MAGIC %md
 # MAGIC ### Step 3: Test Routing -- Genie Tool
 # MAGIC
-# MAGIC This question is about **current fleet data** and should route to the Genie Space.
+# MAGIC This question is about current fleet data and should route to the Genie Space.
 
 # COMMAND ----------
 
@@ -889,7 +799,6 @@ def ask_supervisor(question, mas_id=MAS_ID):
         answer = result.get("choices", [{}])[0].get("message", {}).get("content", "No response")
         print(f"A: {answer}")
 
-        # Show which tools were used
         tool_calls = result.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
         if tool_calls:
             print(f"\nTools used:")
@@ -903,7 +812,6 @@ def ask_supervisor(question, mas_id=MAS_ID):
 
 # COMMAND ----------
 
-# Test 1: Should route to GENIE (structured data query)
 ask_supervisor(
     "How many GPUs are currently showing thermal warnings?"
 )
@@ -913,11 +821,10 @@ ask_supervisor(
 # MAGIC %md
 # MAGIC ### Step 4: Test Routing -- Knowledge Assistant Tool
 # MAGIC
-# MAGIC This question is about **procedures from documentation** and should route to the KA.
+# MAGIC This question is about procedures from documentation and should route to the KA.
 
 # COMMAND ----------
 
-# Test 2: Should route to KNOWLEDGE ASSISTANT (runbook procedure)
 ask_supervisor(
     "What is the runbook procedure for thermal throttling?"
 )
@@ -925,15 +832,13 @@ ask_supervisor(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 5: Test Routing -- BOTH Tools
+# MAGIC ### Step 5: Test Routing -- Both Tools
 # MAGIC
-# MAGIC This question needs **data from Genie** (how many GPUs have warnings) AND
-# MAGIC **procedures from the KA** (what to do about it). The supervisor should
-# MAGIC consult both tools and combine the answers.
+# MAGIC This question needs data from Genie and procedures from the KA. The supervisor
+# MAGIC should consult both tools and combine the answers.
 
 # COMMAND ----------
 
-# Test 3: Should route to BOTH tools (data + procedure)
 ask_supervisor(
     "We have 5 GPUs showing thermal warnings -- what should we do?"
 )
@@ -942,40 +847,15 @@ ask_supervisor(
 
 # MAGIC %md
 # MAGIC ---
-# MAGIC ## Summary & Key Takeaways
+# MAGIC ## Summary
 # MAGIC
 # MAGIC | Component | What We Built | Key Concept |
 # MAGIC |-----------|--------------|-------------|
-# MAGIC | **Vector Search** | Index on GPU runbook chunks | Delta Sync auto-updates embeddings as source data changes |
-# MAGIC | **Knowledge Assistant** | "GPU Operations Advisor" | Managed RAG -- just point at a Volume, no manual chunking needed |
-# MAGIC | **Multi-Agent Supervisor** | "DGX Operations Center" | Intelligent routing between structured data (Genie) and unstructured docs (KA) |
+# MAGIC | Vector Search | Index on GPU runbook chunks | Delta Sync auto-updates embeddings as source data changes |
+# MAGIC | Knowledge Assistant | "GPU Operations Advisor" | Managed RAG -- point at a Volume, no manual chunking needed |
+# MAGIC | Multi-Agent Supervisor | "DGX Operations Center" | Intelligent routing between structured data (Genie) and unstructured docs (KA) |
 # MAGIC
-# MAGIC ### Architecture
-# MAGIC
-# MAGIC ```
-# MAGIC                    +---------------------------+
-# MAGIC                    |   DGX Operations Center   |
-# MAGIC                    |   (Multi-Agent Supervisor)|
-# MAGIC                    +----------+----------------+
-# MAGIC                               |
-# MAGIC              +----------------+----------------+
-# MAGIC              |                                 |
-# MAGIC   +----------v----------+         +-----------v-----------+
-# MAGIC   | DGX Fleet Analytics |         | GPU Operations Advisor|
-# MAGIC   |   (Genie Space)     |         | (Knowledge Assistant) |
-# MAGIC   +----------+----------+         +-----------+-----------+
-# MAGIC              |                                 |
-# MAGIC   +----------v----------+         +-----------v-----------+
-# MAGIC   | Structured Tables   |         |   UC Volume (PDFs)    |
-# MAGIC   | (GPU telemetry)     |         |   (GPU Runbooks)      |
-# MAGIC   +---------------------+         +-----------------------+
-# MAGIC ```
-# MAGIC
-# MAGIC ### What's Next?
-# MAGIC
-# MAGIC - **Notebook 04**: Model deployment and A/B testing on DGX Cloud
-# MAGIC - Try adding more knowledge sources (Confluence, SharePoint) to the KA
-# MAGIC - Experiment with custom instructions to improve routing accuracy
+# MAGIC Next: **Notebook 04** -- Model deployment and A/B testing on DGX Cloud.
 
 # COMMAND ----------
 
@@ -983,7 +863,7 @@ ask_supervisor(
 # MAGIC ---
 # MAGIC ## Cleanup (Optional)
 # MAGIC
-# MAGIC Uncomment and run the cells below to clean up resources created in this notebook.
+# MAGIC Uncomment the cells below to delete resources created in this notebook.
 
 # COMMAND ----------
 
@@ -1005,7 +885,6 @@ ask_supervisor(
 
 # COMMAND ----------
 
-# # Note: Knowledge Assistants and Multi-Agent Supervisors can be deleted via UI
-# # or via the REST API:
+# # Knowledge Assistants and Multi-Agent Supervisors can be deleted via UI or REST API:
 # # requests.delete(f"{host}/api/2.0/knowledge-assistants/{KA_ID}", headers=headers)
 # # requests.delete(f"{host}/api/2.0/multi-agent-supervisors/{MAS_ID}", headers=headers)

@@ -1,14 +1,10 @@
 # Databricks notebook source
 
 # MAGIC %md
-# MAGIC # Block 7: End-to-End GPU Fleet Operations Pipeline
-# MAGIC ### NVIDIA DGX Cloud MLOps & GenAI Workshop
-# MAGIC
-# MAGIC **Duration:** 15 minutes (live demo)
+# MAGIC # End-to-End GPU Fleet Operations Pipeline
+# MAGIC *Live demo: full pipeline from telemetry spike to automated remediation.*
 # MAGIC
 # MAGIC ---
-# MAGIC
-# MAGIC **What you'll see in this demo:**
 # MAGIC
 # MAGIC | Step | Component | What Happens |
 # MAGIC |------|-----------|--------------|
@@ -21,12 +17,12 @@
 # MAGIC | 7 | **Monitoring** | Observe drift in temperature distributions |
 # MAGIC | 8 | **Retraining** | Automated retraining trigger concept |
 # MAGIC
-# MAGIC > **Instructor note:** Run each cell top-to-bottom. Pause at each section header to explain what's happening before executing.
+# MAGIC Instructor note: Run each cell top-to-bottom. Pause at each section header to explain before executing.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Setup & Configuration
+# MAGIC ## Setup and Configuration
 
 # COMMAND ----------
 
@@ -44,9 +40,7 @@ from pyspark.sql.types import (
     IntegerType,
 )
 
-# ---------------------------------------------------------------------------
-# Placeholder variables -- update these before the demo
-# ---------------------------------------------------------------------------
+# Update these before the demo
 CATALOG = "nvidia_dgx_workshop"
 SCHEMA = "gpu_ops"
 
@@ -55,7 +49,7 @@ KA_NAME = "<YOUR_KNOWLEDGE_ASSISTANT_NAME>"        # e.g. "gpu-runbook-assistant
 SUPERVISOR_AGENT_NAME = "<YOUR_SUPERVISOR_AGENT>"  # e.g. "gpu-fleet-supervisor"
 MODEL_SERVING_ENDPOINT = "gpu-anomaly-detector"
 
-# Databricks host & token (auto-populated in notebooks)
+# Databricks host and token (auto-populated in notebooks)
 DATABRICKS_HOST = spark.conf.get("spark.databricks.workspaceUrl")
 DATABRICKS_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 
@@ -72,13 +66,9 @@ print(f"Endpoint:   {MODEL_SERVING_ENDPOINT}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 1: Simulate GPU Telemetry Spike
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - In production, telemetry streams in via Kafka / Kinesis through Auto Loader.
-# MAGIC - Here we inject **anomalous readings** for cluster `dgx-aws-03` to trigger the full pipeline.
-# MAGIC - Notice the temperatures above 90C and utilization near 100% -- these will be flagged as anomalies.
+# MAGIC Talking points: In production, telemetry streams via Kafka/Kinesis through Auto Loader. Here we inject anomalous readings for cluster `dgx-aws-03` -- temperatures above 90C and utilization near 100% -- to trigger the full pipeline.
 
 # COMMAND ----------
 
@@ -148,13 +138,9 @@ display(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 2: Update Feature Table
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - In production this runs as a scheduled Lakeflow Declarative Pipeline (DLT).
-# MAGIC - We aggregate the raw telemetry into per-GPU rolling features: avg/max/stddev over 15-min windows.
-# MAGIC - The feature table is published to Unity Catalog for both training and online serving.
+# MAGIC Talking points: In production this runs as a scheduled Lakeflow Declarative Pipeline. We aggregate raw telemetry into per-GPU rolling features (avg/max/stddev over 15-min windows) and publish the feature table to Unity Catalog for training and online serving.
 
 # COMMAND ----------
 
@@ -207,18 +193,13 @@ display(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 3: Score with Model Serving Endpoint
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - The `gpu-anomaly-detector` endpoint hosts an MLflow model trained on historical GPU telemetry.
-# MAGIC - It returns an anomaly score (0-1) and a boolean flag.
-# MAGIC - Model Serving gives us sub-100ms latency with autoscaling -- critical for real-time fleet ops.
-# MAGIC - Watch for `gpu-a100-017` through `gpu-a100-021` on `dgx-aws-03` to show as anomalies.
+# MAGIC Talking points: The `gpu-anomaly-detector` endpoint hosts an MLflow model returning an anomaly score (0-1) and a boolean flag. Model Serving provides sub-100ms latency with autoscaling. Watch for `gpu-a100-017` through `gpu-a100-021` to be flagged.
 
 # COMMAND ----------
 
-# Collect features for the GPUs we just inserted
+# Collect features for the anomalous GPUs
 scoring_df = (
     feature_df.filter(F.col("cluster_id") == "dgx-aws-03")
     .select(
@@ -240,11 +221,9 @@ scoring_df = (
     .toPandas()
 )
 
-# Build the payload
 records = scoring_df.drop(columns=["gpu_id", "cluster_id"]).to_dict(orient="records")
 payload = {"dataframe_records": records}
 
-# Call the Model Serving endpoint
 url = f"https://{DATABRICKS_HOST}/serving-endpoints/{MODEL_SERVING_ENDPOINT}/invocations"
 
 print(f"Scoring {len(records)} GPUs against endpoint: {MODEL_SERVING_ENDPOINT}")
@@ -269,13 +248,9 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 4: Query Genie Space -- Natural Language Analytics
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - Genie Spaces let non-technical users ask questions in plain English.
-# MAGIC - Behind the scenes, Genie generates SQL against our Unity Catalog tables.
-# MAGIC - This is how an ops team lead would check on fleet status without writing SQL.
+# MAGIC Talking points: Genie Spaces let non-technical users ask questions in plain English. Behind the scenes, Genie generates SQL against Unity Catalog tables. This is how an ops lead checks fleet status without writing SQL.
 
 # COMMAND ----------
 
@@ -283,7 +258,6 @@ def query_genie(space_id, question, max_wait_seconds=60):
     """Query a Genie Space and poll for results."""
     base_url = f"https://{DATABRICKS_HOST}/api/2.0/genie/spaces/{space_id}"
 
-    # Start conversation
     start_resp = requests.post(
         f"{base_url}/conversations",
         headers=HEADERS,
@@ -295,7 +269,6 @@ def query_genie(space_id, question, max_wait_seconds=60):
     conversation_id = conversation["conversation_id"]
     message_id = conversation["message_id"]
 
-    # Poll for result
     poll_url = f"{base_url}/conversations/{conversation_id}/messages/{message_id}"
     for _ in range(max_wait_seconds // 3):
         time.sleep(3)
@@ -319,7 +292,6 @@ print(f"Asking Genie: \"{genie_question}\"\n")
 
 genie_result = query_genie(GENIE_SPACE_ID, genie_question)
 
-# Display the Genie response
 if genie_result.get("status") in ("COMPLETED", "COMPLETE"):
     for attachment in genie_result.get("attachments", []):
         if "query" in attachment:
@@ -336,13 +308,9 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 5: Query Knowledge Assistant -- Runbook Retrieval
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - The Knowledge Assistant is backed by a Vector Search index over our GPU operations runbooks.
-# MAGIC - It uses RAG to find the most relevant procedures and summarize them.
-# MAGIC - This replaces hunting through Confluence/SharePoint for the right runbook at 2 AM.
+# MAGIC Talking points: The Knowledge Assistant uses RAG backed by a Vector Search index over GPU operations runbooks. It finds relevant procedures and summarizes them -- replacing the 2 AM hunt through Confluence for the right runbook.
 
 # COMMAND ----------
 
@@ -369,15 +337,12 @@ print(f"\"{ka_question}\"\n")
 
 ka_result = query_knowledge_assistant(KA_NAME, ka_question)
 
-# Extract and display the response
 if "choices" in ka_result:
     answer = ka_result["choices"][0]["message"]["content"]
     print("Knowledge Assistant Response:")
-    print("-" * 60)
     print(answer)
 elif "output" in ka_result:
     print("Knowledge Assistant Response:")
-    print("-" * 60)
     print(ka_result["output"])
 else:
     print(json.dumps(ka_result, indent=2, default=str))
@@ -385,16 +350,9 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 6: Query Supervisor Agent -- Orchestrated Remediation
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - The Supervisor Agent (Multi-Agent System) coordinates:
-# MAGIC   - **Genie Agent** for real-time fleet analytics
-# MAGIC   - **Knowledge Assistant** for runbook procedures
-# MAGIC   - **Custom tools** for cluster capacity lookups and job migration
-# MAGIC - It synthesizes all the information into a single actionable recommendation.
-# MAGIC - This is the "single pane of glass" for GPU fleet operations.
+# MAGIC Talking points: The Supervisor Agent (Multi-Agent System) coordinates the Genie Agent for analytics, the Knowledge Assistant for runbooks, and custom tools for cluster capacity and job migration. It synthesizes everything into one actionable recommendation -- the single pane of glass for GPU fleet ops.
 
 # COMMAND ----------
 
@@ -426,15 +384,12 @@ print(f"\"{supervisor_question}\"\n")
 
 supervisor_result = query_supervisor_agent(SUPERVISOR_AGENT_NAME, supervisor_question)
 
-# Extract and display the response
 if "choices" in supervisor_result:
     answer = supervisor_result["choices"][0]["message"]["content"]
     print("Supervisor Agent Recommendation:")
-    print("=" * 60)
     print(answer)
 elif "output" in supervisor_result:
     print("Supervisor Agent Recommendation:")
-    print("=" * 60)
     print(supervisor_result["output"])
 else:
     print(json.dumps(supervisor_result, indent=2, default=str))
@@ -442,18 +397,12 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 7: Monitoring -- Drift Detection
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - Lakehouse Monitoring tracks statistical drift in our feature table.
-# MAGIC - We can see the temperature distribution shifting higher -- a leading indicator.
-# MAGIC - The profile metrics table stores historical statistics for every monitored column.
-# MAGIC - In production, alerts fire when drift exceeds a threshold.
+# MAGIC Talking points: Lakehouse Monitoring tracks statistical drift in the feature table. The temperature distribution is shifting higher -- a leading indicator. Profile metrics are stored historically, and alerts fire in production when drift exceeds a threshold.
 
 # COMMAND ----------
 
-# Query the Lakehouse Monitor drift metrics for the feature table
 drift_df = spark.sql(f"""
     SELECT
         column_name,
@@ -475,9 +424,8 @@ display(drift_df)
 
 # COMMAND ----------
 
-# Show temperature distribution comparison
+# Temperature distribution: baseline vs current window
 print("Temperature Distribution: Baseline vs Current Window")
-print("-" * 55)
 
 temp_comparison = spark.sql(f"""
     SELECT
@@ -506,19 +454,9 @@ display(temp_comparison)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
 # MAGIC ## Step 8: Automated Retraining Trigger (Concept)
 # MAGIC
-# MAGIC **Talking points:**
-# MAGIC - When drift exceeds a threshold, a Databricks **Workflow Job** is triggered automatically.
-# MAGIC - The retraining pipeline:
-# MAGIC   1. Pulls the latest labeled data from the feature table
-# MAGIC   2. Trains a new model version using MLflow Experiment Tracking
-# MAGIC   3. Registers the model in **Unity Catalog** as a new version
-# MAGIC   4. Runs validation against a holdout set
-# MAGIC   5. Promotes to the `Champion` alias if validation passes (via Model Registry)
-# MAGIC   6. The Model Serving endpoint auto-deploys the new champion
-# MAGIC - This closes the loop: **data drift --> detection --> retraining --> deployment** -- all automated.
+# MAGIC Talking points: When drift exceeds a threshold, a Databricks Workflow Job fires automatically. The pipeline pulls latest labeled data, trains a new model version with MLflow, registers it in Unity Catalog, validates against a holdout set, and promotes to Champion. Model Serving auto-deploys the new version. This closes the loop: drift, detection, retraining, deployment -- all automated.
 # MAGIC
 # MAGIC ### Architecture
 # MAGIC
@@ -538,7 +476,7 @@ display(temp_comparison)
 # MAGIC Model Serving Endpoint (auto-deploys new Champion)
 # MAGIC ```
 # MAGIC
-# MAGIC ### Key Config (Databricks Asset Bundle)
+# MAGIC ### Example DAB Config
 # MAGIC
 # MAGIC ```yaml
 # MAGIC resources:
@@ -555,167 +493,120 @@ display(temp_comparison)
 # MAGIC           existing_cluster_id: ${var.dgx_cluster_id}
 # MAGIC ```
 # MAGIC
-# MAGIC > **In production**, the alert from Lakehouse Monitor fires a webhook that triggers this job.
-# MAGIC > For this workshop, we showed the manual flow -- but the automation is identical.
+# MAGIC In production, the Lakehouse Monitor alert fires a webhook that triggers this job. The workshop showed the manual flow; the automation is identical.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ---
-# MAGIC ---
-# MAGIC # Customer Use Cases: Where This Pattern Applies
+# MAGIC # Customer Use Cases
 # MAGIC
-# MAGIC The GPU Fleet Operations pipeline we just demonstrated is a **template** for any domain where you need:
-# MAGIC - Real-time data ingestion and feature engineering
-# MAGIC - ML-powered anomaly detection or prediction
-# MAGIC - Natural language analytics (Genie)
-# MAGIC - Knowledge retrieval (RAG / Knowledge Assistant)
-# MAGIC - Orchestrated decision-making (Supervisor Agent)
-# MAGIC - Continuous monitoring and automated retraining
-# MAGIC
-# MAGIC Below are five industry examples.
+# MAGIC The pipeline above is a template for any domain combining real-time ingestion, ML-powered detection, natural language analytics, knowledge retrieval, agent orchestration, and continuous monitoring. Below are five industry examples.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Use Case 1: Telecom -- Network Anomaly Detection
 # MAGIC
-# MAGIC | Aspect | Details |
-# MAGIC |--------|---------|
-# MAGIC | **Problem** | Detect network degradation across thousands of cell towers before customers are impacted |
-# MAGIC | **Data** | RAN telemetry (signal strength, handover rates, packet loss), CDRs, weather data |
-# MAGIC | **Ingestion** | Auto Loader streaming from Kafka topics, 500K events/sec |
-# MAGIC | **Feature Engineering** | Rolling 5-min aggregations per tower: avg signal, anomaly rate, handover failures |
-# MAGIC | **Model** | Isolation Forest + LSTM ensemble trained on DGX, served via Model Serving |
-# MAGIC | **Genie Space** | NOC analysts ask: "Which towers in the Dallas metro have degraded signal in the last hour?" |
-# MAGIC | **Knowledge Assistant** | RAG over network ops runbooks: "What is the escalation path for RAN congestion?" |
-# MAGIC | **Supervisor Agent** | Correlates tower anomalies with weather data, recommends load balancing or dispatches field crew |
-# MAGIC | **Monitoring** | Drift detection on signal distributions; auto-retrain when seasonal patterns shift |
-# MAGIC | **Business Impact** | 40% reduction in mean time to detect (MTTD), 25% fewer customer-impacting outages |
+# MAGIC Detect network degradation across thousands of cell towers before customers are impacted. RAN telemetry (signal strength, handover rates, packet loss) streams at 500K events/sec through Auto Loader. An Isolation Forest + LSTM ensemble trained on DGX scores towers in real time, while a Supervisor Agent correlates anomalies with weather data to recommend load balancing or field dispatch.
+# MAGIC
+# MAGIC | Pipeline Component | Telecom Mapping |
+# MAGIC |---|---|
+# MAGIC | Feature Engineering | Rolling 5-min per-tower aggregations (avg signal, handover failures) |
+# MAGIC | Genie Space | NOC analysts: "Which Dallas towers degraded in the last hour?" |
+# MAGIC | Knowledge Assistant | RAG over network ops runbooks for escalation paths |
+# MAGIC | Monitoring | Drift on signal distributions; seasonal retrain triggers |
+# MAGIC | Impact | 40% MTTD reduction, 25% fewer customer-impacting outages |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Use Case 2: Financial Services -- Due Diligence Automation
 # MAGIC
-# MAGIC | Aspect | Details |
-# MAGIC |--------|---------|
-# MAGIC | **Problem** | Accelerate M&A due diligence by automating document review and risk identification |
-# MAGIC | **Data** | SEC filings, financial statements, legal contracts, news feeds, internal CRM notes |
-# MAGIC | **Ingestion** | Batch ingestion of PDFs via Auto Loader + unstructured data parsing (Docling / LlamaParse) |
-# MAGIC | **Feature Engineering** | Entity extraction, sentiment scoring, financial ratio computation across 10K/10Q filings |
-# MAGIC | **Model** | Fine-tuned LLM (Llama 3.1 70B on DGX) for contract clause classification and risk scoring |
-# MAGIC | **Genie Space** | Analysts ask: "What is the revenue trend for TargetCo over the last 8 quarters?" |
-# MAGIC | **Knowledge Assistant** | RAG over internal M&A playbooks: "What are the red flags for working capital adjustments?" |
-# MAGIC | **Supervisor Agent** | Aggregates financial analysis, legal risk flags, and market sentiment into a deal memo draft |
-# MAGIC | **Monitoring** | Track extraction accuracy; retrain when new document formats appear |
-# MAGIC | **Business Impact** | Due diligence cycle reduced from 6 weeks to 10 days; analysts review AI-generated summaries instead of raw docs |
+# MAGIC Accelerate M&A due diligence by automating document review and risk identification. SEC filings, contracts, and financial statements are batch-ingested and parsed with Docling/LlamaParse. A fine-tuned Llama 3.1 70B on DGX classifies contract clauses and scores risk, while a Supervisor Agent aggregates financial analysis, legal flags, and market sentiment into a draft deal memo.
+# MAGIC
+# MAGIC | Pipeline Component | FinServ Mapping |
+# MAGIC |---|---|
+# MAGIC | Feature Engineering | Entity extraction, sentiment scoring, financial ratio computation |
+# MAGIC | Genie Space | Analysts: "Revenue trend for TargetCo over the last 8 quarters?" |
+# MAGIC | Knowledge Assistant | RAG over M&A playbooks for red flags and working capital criteria |
+# MAGIC | Monitoring | Extraction accuracy tracking; retrain on new document formats |
+# MAGIC | Impact | Due diligence cycle from 6 weeks to 10 days |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Use Case 3: Manufacturing -- Predictive Maintenance
 # MAGIC
-# MAGIC | Aspect | Details |
-# MAGIC |--------|---------|
-# MAGIC | **Problem** | Predict equipment failures on production lines before unplanned downtime occurs |
-# MAGIC | **Data** | IoT sensor data (vibration, temperature, pressure, RPM), maintenance logs, ERP work orders |
-# MAGIC | **Ingestion** | Streaming from IoT Edge gateways via Event Hubs / Kinesis, 100K sensors reporting every 5 sec |
-# MAGIC | **Feature Engineering** | Time-domain and frequency-domain features (FFT on vibration signals), rolling failure indicators |
-# MAGIC | **Model** | Survival analysis + gradient-boosted trees for remaining useful life (RUL) prediction |
-# MAGIC | **Genie Space** | Plant managers ask: "Which machines on Line 3 are predicted to fail in the next 48 hours?" |
-# MAGIC | **Knowledge Assistant** | RAG over maintenance SOPs: "What is the procedure for bearing replacement on CNC Mill Model X?" |
-# MAGIC | **Supervisor Agent** | Cross-references RUL predictions with parts inventory and technician schedules, generates optimized maintenance plan |
-# MAGIC | **Monitoring** | Drift on vibration frequency distributions; retrain when new machine types are added to the line |
-# MAGIC | **Business Impact** | 35% reduction in unplanned downtime, 20% decrease in maintenance costs through optimized scheduling |
+# MAGIC Predict equipment failures on production lines before unplanned downtime. IoT sensor data (vibration, temperature, pressure) streams from 100K sensors every 5 seconds. Survival analysis and gradient-boosted trees estimate remaining useful life per machine, while a Supervisor Agent cross-references predictions with parts inventory and technician schedules to generate optimized maintenance plans.
+# MAGIC
+# MAGIC | Pipeline Component | Manufacturing Mapping |
+# MAGIC |---|---|
+# MAGIC | Feature Engineering | Time-domain and frequency-domain features (FFT on vibration), rolling failure indicators |
+# MAGIC | Genie Space | Plant managers: "Which Line 3 machines fail within 48 hours?" |
+# MAGIC | Knowledge Assistant | RAG over maintenance SOPs for bearing replacement procedures |
+# MAGIC | Monitoring | Drift on vibration distributions; retrain when new machine types added |
+# MAGIC | Impact | 35% reduction in unplanned downtime, 20% lower maintenance costs |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Use Case 4: Healthcare -- Clinical Document Analysis
 # MAGIC
-# MAGIC | Aspect | Details |
-# MAGIC |--------|---------|
-# MAGIC | **Problem** | Extract structured insights from unstructured clinical notes to improve care coordination and coding accuracy |
-# MAGIC | **Data** | EHR clinical notes, discharge summaries, radiology reports, pathology reports, ICD/CPT code mappings |
-# MAGIC | **Ingestion** | HL7/FHIR event streams via Lakeflow Connect, batch ingestion of historical notes |
-# MAGIC | **Feature Engineering** | NER for conditions, medications, procedures; negation detection; temporal relation extraction |
-# MAGIC | **Model** | Fine-tuned biomedical LLM (BioMistral on DGX) for clinical NLP; ICD-10 code suggestion model |
-# MAGIC | **Genie Space** | Clinical ops team asks: "How many patients discharged last week had a primary diagnosis of CHF?" |
-# MAGIC | **Knowledge Assistant** | RAG over clinical guidelines: "What are the CMS criteria for inpatient admission for pneumonia?" |
-# MAGIC | **Supervisor Agent** | Correlates extracted diagnoses with coding suggestions, flags discrepancies for human review |
-# MAGIC | **Monitoring** | Track extraction F1 scores; retrain when new clinical terminology or guidelines are published |
-# MAGIC | **Business Impact** | 50% reduction in manual chart review time, 15% improvement in coding accuracy, faster prior auth |
+# MAGIC Extract structured insights from unstructured clinical notes to improve care coordination and coding accuracy. EHR notes, discharge summaries, and radiology reports stream via HL7/FHIR through Lakeflow Connect. A fine-tuned BioMistral on DGX performs clinical NLP and ICD-10 code suggestion, while a Supervisor Agent correlates extracted diagnoses with coding suggestions and flags discrepancies for human review.
+# MAGIC
+# MAGIC | Pipeline Component | Healthcare Mapping |
+# MAGIC |---|---|
+# MAGIC | Feature Engineering | NER for conditions/medications, negation detection, temporal relation extraction |
+# MAGIC | Genie Space | Clinical ops: "Patients discharged last week with primary CHF diagnosis?" |
+# MAGIC | Knowledge Assistant | RAG over clinical guidelines for CMS admission criteria |
+# MAGIC | Monitoring | Extraction F1 scores; retrain on new terminology or guidelines |
+# MAGIC | Impact | 50% less manual chart review, 15% coding accuracy improvement |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Use Case 5: Retail -- Demand Forecasting + LLM Commentary
 # MAGIC
-# MAGIC | Aspect | Details |
-# MAGIC |--------|---------|
-# MAGIC | **Problem** | Improve demand forecasting accuracy and generate executive-ready commentary on forecast drivers |
-# MAGIC | **Data** | POS transactions, inventory levels, promotions calendar, weather, social media sentiment, competitor pricing |
-# MAGIC | **Ingestion** | Real-time POS streams via Kafka, daily batch loads for external signals (weather, social) |
-# MAGIC | **Feature Engineering** | Lag features, promotional lift factors, holiday indicators, price elasticity estimates per SKU-store |
-# MAGIC | **Model** | Hierarchical time-series model (Temporal Fusion Transformer on DGX) for SKU-store-day forecasts |
-# MAGIC | **Genie Space** | Merchandising team asks: "Which categories are trending above forecast in the Southeast region this week?" |
-# MAGIC | **Knowledge Assistant** | RAG over merchandising playbooks: "What is the markdown strategy for seasonal overstock?" |
-# MAGIC | **Supervisor Agent** | Combines forecast outputs with inventory positions and promotional calendar, generates weekly buy recommendation with LLM narrative |
-# MAGIC | **Monitoring** | Forecast accuracy (MAPE) by category; retrain when new product lines launch or demand patterns shift |
-# MAGIC | **Business Impact** | 20% reduction in overstock waste, 12% improvement in forecast accuracy, automated weekly executive summaries |
+# MAGIC Improve demand forecast accuracy and generate executive-ready commentary on forecast drivers. POS transactions stream in real time alongside daily batch loads for weather, social sentiment, and competitor pricing. A Temporal Fusion Transformer on DGX produces SKU-store-day forecasts, while a Supervisor Agent combines outputs with inventory positions and the promotional calendar to generate weekly buy recommendations with LLM narrative.
+# MAGIC
+# MAGIC | Pipeline Component | Retail Mapping |
+# MAGIC |---|---|
+# MAGIC | Feature Engineering | Lag features, promotional lift, holiday indicators, price elasticity per SKU-store |
+# MAGIC | Genie Space | Merchandising: "Categories trending above forecast in Southeast this week?" |
+# MAGIC | Knowledge Assistant | RAG over merchandising playbooks for markdown strategies |
+# MAGIC | Monitoring | MAPE by category; retrain on new product lines or demand shifts |
+# MAGIC | Impact | 20% overstock reduction, 12% forecast accuracy gain |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ---
-# MAGIC ---
-# MAGIC # Recap & Resources
+# MAGIC # Recap and Resources
 # MAGIC
-# MAGIC ## What We Built Today
+# MAGIC ## What We Built
 # MAGIC
-# MAGIC ```
-# MAGIC Raw Telemetry --> Feature Engineering --> Anomaly Detection --> Analytics & Retrieval --> Agent Orchestration --> Monitoring & Retraining
-# MAGIC      |                  |                      |                      |                         |                       |
-# MAGIC  Auto Loader      DLT / SQL             Model Serving          Genie + KA              Supervisor Agent        Lakehouse Monitor
-# MAGIC  Delta Lake       Feature Table          MLflow + UC            Vector Search           Multi-Agent System      Drift Detection
-# MAGIC ```
-# MAGIC
-# MAGIC ## Key Takeaways
-# MAGIC
-# MAGIC 1. **Unified Platform** -- Data, ML, and GenAI all on one lakehouse. No data copies, no integration tax.
-# MAGIC 2. **GPU-Native** -- DGX Cloud clusters for training, Model Serving for inference. Use GPUs where they matter.
-# MAGIC 3. **Governed by Default** -- Unity Catalog for data, features, models, and agents. One lineage graph.
-# MAGIC 4. **Natural Language First** -- Genie Spaces and Knowledge Assistants make insights accessible to everyone.
-# MAGIC 5. **Agents, Not Just Models** -- Supervisor Agents orchestrate across tools and knowledge sources for real decisions.
-# MAGIC 6. **Closed-Loop Operations** -- Monitoring detects drift, triggers retraining, deploys new models automatically.
+# MAGIC | Step | Component | Databricks Service |
+# MAGIC |------|-----------|-------------------|
+# MAGIC | 1 | Data Ingestion | Auto Loader, Delta Lake |
+# MAGIC | 2 | Feature Engineering | DLT / SQL, Feature Table |
+# MAGIC | 3 | Anomaly Detection | Model Serving, MLflow, Unity Catalog |
+# MAGIC | 4 | Natural Language Analytics | Genie Space |
+# MAGIC | 5 | Knowledge Retrieval | Knowledge Assistant, Vector Search |
+# MAGIC | 6 | Agent Orchestration | Supervisor Agent (Multi-Agent System) |
+# MAGIC | 7-8 | Monitoring and Retraining | Lakehouse Monitor, Drift Detection |
 # MAGIC
 # MAGIC ## Resources
 # MAGIC
 # MAGIC | Resource | Link |
 # MAGIC |----------|------|
-# MAGIC | Databricks Documentation | https://docs.databricks.com |
-# MAGIC | MLflow Documentation | https://mlflow.org/docs/latest |
-# MAGIC | NVIDIA DGX Cloud on Databricks | https://www.databricks.com/partners/nvidia |
 # MAGIC | Mosaic AI Agent Framework | https://docs.databricks.com/en/generative-ai/agent-framework/index.html |
-# MAGIC | Genie Spaces | https://docs.databricks.com/en/genie/index.html |
 # MAGIC | Lakehouse Monitoring | https://docs.databricks.com/en/lakehouse-monitoring/index.html |
 # MAGIC | Model Serving | https://docs.databricks.com/en/machine-learning/model-serving/index.html |
-# MAGIC | Unity Catalog | https://docs.databricks.com/en/data-governance/unity-catalog/index.html |
-# MAGIC
-# MAGIC ## Workshop Notebooks
-# MAGIC
-# MAGIC | # | Notebook | Topic |
-# MAGIC |---|----------|-------|
-# MAGIC | 01 | Platform Setup | Catalog, schema, cluster config |
-# MAGIC | 02 | Data Ingestion | Auto Loader, streaming, Delta Lake |
-# MAGIC | 03 | Feature Engineering | DLT pipelines, feature tables |
-# MAGIC | 04 | Model Training | MLflow, DGX training, Unity Catalog registry |
-# MAGIC | 05 | GenAI Agents | Genie, Knowledge Assistant, Supervisor Agent |
-# MAGIC | **06** | **End-to-End Demo** | **This notebook -- the full pipeline in action** |
+# MAGIC | NVIDIA DGX Cloud on Databricks | https://www.databricks.com/partners/nvidia |
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC **Thank you for attending the NVIDIA DGX Cloud MLOps & GenAI Workshop!**
+# MAGIC **Thank you for attending the NVIDIA DGX Cloud MLOps and GenAI Workshop.**
 # MAGIC
 # MAGIC Questions? Reach out to your Databricks and NVIDIA account teams.

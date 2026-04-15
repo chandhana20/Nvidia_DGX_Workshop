@@ -1,40 +1,30 @@
 # Databricks notebook source
 
 # MAGIC %md
-# MAGIC # Block 1: Setup & Explore -- NVIDIA DGX Cloud MLOps & GenAI Workshop
+# MAGIC # NVIDIA DGX Cloud -- MLOps & GenAI Workshop
 # MAGIC
-# MAGIC **Duration:** ~30 minutes
+# MAGIC *Build an end-to-end GPU fleet monitoring pipeline on Databricks.*
 # MAGIC
-# MAGIC This notebook sets up the foundational data assets for the workshop. We will:
-# MAGIC 1. Create the `main.mlops_genai_workshop` schema
-# MAGIC 2. Generate deterministic synthetic GPU fleet telemetry and job data
-# MAGIC 3. Create Unity Catalog volumes for downstream assets
-# MAGIC 4. Explore the data with SQL queries to verify correctness
+# MAGIC ---
 # MAGIC
-# MAGIC **Scenario:** You operate a fleet of 30 DGX Cloud clusters spanning AWS, Azure, GCP, and Oracle.
-# MAGIC Each cluster runs a mix of A100, H100, and H200 GPUs executing LLM training, Vision, RL, and Tabular workloads.
-# MAGIC Your job is to build an end-to-end MLOps pipeline that monitors GPU health, detects anomalies, and optimizes fleet utilization.
+# MAGIC **What you'll build in this notebook:**
+# MAGIC - A Unity Catalog schema and volumes for all workshop assets
+# MAGIC - Synthetic telemetry for a 30-cluster, multi-cloud DGX fleet (A100 / H100 / H200)
+# MAGIC - Health events, ML job history, anomaly labels, and a joined training dataset
+# MAGIC - Exploratory queries to validate the generated data
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Create Schema
+# MAGIC ## Section 1: Create Schema and Volumes
 # MAGIC
-# MAGIC We use a dedicated schema under the `main` catalog to keep all workshop assets organized.
+# MAGIC All workshop assets live under `main.mlops_genai_workshop`. Two volumes hold documentation and app code for later notebooks.
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC CREATE SCHEMA IF NOT EXISTS main.mlops_genai_workshop;
 # MAGIC USE SCHEMA main.mlops_genai_workshop;
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 2. Create Unity Catalog Volumes
-# MAGIC
-# MAGIC - **docs** -- store documentation, PDFs, and reference materials
-# MAGIC - **app_code** -- store application code artifacts for later deployment
 
 # COMMAND ----------
 
@@ -45,17 +35,16 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Generate Synthetic GPU Fleet Data
+# MAGIC ## Section 2: Generate Synthetic GPU Fleet Data
 # MAGIC
-# MAGIC All data generation uses PySpark with deterministic seeds so results are reproducible across runs.
-# MAGIC No external libraries (e.g., Faker) are required.
+# MAGIC All data uses deterministic seeds for reproducibility. No external libraries required.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3a. Cluster Inventory (~30 rows)
+# MAGIC ### 2a. Cluster Inventory (~30 rows)
 # MAGIC
-# MAGIC 30 clusters distributed across AWS, Azure, GCP, and Oracle with A100, H100, and H200 GPUs.
+# MAGIC 30 clusters across AWS, Azure, GCP, and Oracle with mixed GPU types.
 
 # COMMAND ----------
 
@@ -68,10 +57,8 @@ import random
 import hashlib
 from datetime import datetime, timedelta
 
-# Deterministic seed
 random.seed(42)
 
-# --- Cluster Inventory ---
 cloud_providers = ["AWS", "Azure", "GCP", "Oracle"]
 regions_by_cloud = {
     "AWS": ["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"],
@@ -92,7 +79,6 @@ for i in range(30):
     cluster_id = f"dgx-{cloud_short}-{region_short}-{str(i + 1).zfill(2)}"
     gpu_type = gpu_types[i % len(gpu_types)]
     gpu_count = gpu_counts[i % len(gpu_counts)]
-    # 80% active, 10% maintenance, 10% scaling
     r = random.random()
     status = "active" if r < 0.8 else ("maintenance" if r < 0.9 else "scaling")
     cluster_rows.append((cluster_id, cloud, region, gpu_type, gpu_count, status))
@@ -113,10 +99,9 @@ print(f"cluster_inventory: {df_clusters.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3b. GPU Telemetry (~50K rows)
+# MAGIC ### 2b. GPU Telemetry (~50K rows)
 # MAGIC
-# MAGIC Each row is a point-in-time reading from one GPU. Normal readings have temperatures between 65-85C.
-# MAGIC Approximately 5% of readings are injected anomalies with elevated temperature (90-105C) and higher error counts.
+# MAGIC Point-in-time readings per GPU. Normal temps 65-85C; ~5% injected anomalies at 90-105C with elevated error counts.
 
 # COMMAND ----------
 
@@ -125,11 +110,9 @@ from datetime import datetime, timedelta
 
 random.seed(42)
 
-# Collect cluster info to local driver for data generation
 cluster_data = df_clusters.collect()
 
-# Build GPU ID list: each cluster has gpu_count GPUs
-gpu_registry = []  # list of (gpu_id, cluster_id, gpu_type)
+gpu_registry = []
 for row in cluster_data:
     gpu_type_lower = row["gpu_type"].lower()
     for g in range(row["gpu_count"]):
@@ -138,10 +121,9 @@ for row in cluster_data:
 
 print(f"Total GPUs in fleet: {len(gpu_registry)}")
 
-# Generate ~50K telemetry rows
 NUM_TELEMETRY = 50000
 BASE_TIME = datetime(2025, 1, 1, 0, 0, 0)
-MAX_HOURS = 30 * 24  # 30 days of data
+MAX_HOURS = 30 * 24
 
 telemetry_rows = []
 rng = random.Random(42)
@@ -149,8 +131,6 @@ rng = random.Random(42)
 for i in range(NUM_TELEMETRY):
     gpu_id, cluster_id, gpu_type = gpu_registry[i % len(gpu_registry)]
     ts = BASE_TIME + timedelta(hours=rng.uniform(0, MAX_HOURS))
-
-    # Decide if this reading is anomalous (~5%)
     is_anomaly = rng.random() < 0.05
 
     if is_anomaly:
@@ -190,10 +170,9 @@ print(f"gpu_telemetry: {df_telemetry.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3c. GPU Health Events (~2K rows)
+# MAGIC ### 2c. GPU Health Events (~2K rows)
 # MAGIC
-# MAGIC Realistic GPU error events drawn from common DGX Cloud failure modes:
-# MAGIC NVLink errors, ECC memory faults, thermal throttling, Xid errors, and more.
+# MAGIC Realistic error events modeled on common DGX Cloud failure modes: NVLink errors, ECC faults, thermal throttling, Xid errors, etc.
 
 # COMMAND ----------
 
@@ -250,7 +229,6 @@ for i in range(NUM_EVENTS):
     event_type = rng.choices(event_types, weights=event_type_weights)[0]
     description = rng.choice(gpu_error_descriptions[event_type])
     ts = BASE_TIME + timedelta(hours=rng.uniform(0, MAX_HOURS))
-    # Warnings 90% resolved, errors 60% resolved, critical 30% resolved
     resolve_prob = {"warning": 0.9, "error": 0.6, "critical": 0.3}
     resolved = rng.random() < resolve_prob[event_type]
 
@@ -272,10 +250,9 @@ print(f"gpu_health_events: {df_events.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3d. ML Job Runs (~5K rows)
+# MAGIC ### 2d. ML Job Runs (~5K rows)
 # MAGIC
-# MAGIC Simulated training and inference jobs across PyTorch, TensorFlow, and JAX.
-# MAGIC Job descriptions are realistic free-text summaries that we will use for GenAI classification later.
+# MAGIC Training and inference jobs across PyTorch, TensorFlow, and JAX. Free-text descriptions are used for GenAI classification later.
 
 # COMMAND ----------
 
@@ -339,8 +316,6 @@ job_descriptions_by_type = {
 
 NUM_JOBS = 5000
 job_rows = []
-
-# Get cluster IDs as a list for random selection
 cluster_ids = [row["cluster_id"] for row in cluster_data]
 
 for i in range(NUM_JOBS):
@@ -351,7 +326,6 @@ for i in range(NUM_JOBS):
     description = rng.choice(job_descriptions_by_type[model_type])
     start_time = BASE_TIME + timedelta(hours=rng.uniform(0, MAX_HOURS))
 
-    # Job duration: LLMs and RL tend to run longer
     duration_hours_map = {"LLM": (2, 72), "Vision": (1, 24), "RL": (4, 96), "Tabular": (0.5, 8)}
     min_h, max_h = duration_hours_map[model_type]
     duration_hours = round(rng.uniform(min_h, max_h), 2)
@@ -360,16 +334,14 @@ for i in range(NUM_JOBS):
     status = rng.choices(job_statuses, weights=job_status_weights)[0]
     if status == "running":
         end_time = None
-        gpu_hours = round(duration_hours * 0.5, 2)  # partial
+        gpu_hours = round(duration_hours * 0.5, 2)
     elif status == "failed":
-        # Failed jobs end early
         fail_fraction = rng.uniform(0.1, 0.7)
         end_time = start_time + timedelta(hours=duration_hours * fail_fraction)
         gpu_hours = round(duration_hours * fail_fraction, 2)
     else:
         gpu_hours = round(duration_hours, 2)
 
-    # Cost: roughly $2-3/GPU-hour for A100, more for H100/H200
     cost_per_hour = rng.uniform(2.0, 4.5)
     cost_usd = round(gpu_hours * cost_per_hour, 2)
 
@@ -398,10 +370,9 @@ print(f"ml_job_runs: {df_jobs.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3e. GPU Anomaly Labels (~5K rows)
+# MAGIC ### 2e. GPU Anomaly Labels (~5K rows)
 # MAGIC
-# MAGIC Binary labels for GPU time-windows indicating whether an anomaly was observed.
-# MAGIC Approximately 5% positive rate to simulate realistic class imbalance for anomaly detection training.
+# MAGIC Binary labels for 1-hour GPU windows. ~5% positive rate to simulate realistic class imbalance.
 
 # COMMAND ----------
 
@@ -409,15 +380,11 @@ rng = random.Random(42)
 
 NUM_ANOMALY_LABELS = 5000
 anomaly_rows = []
-
-# Use a subset of GPUs for labeled windows
 labeled_gpus = [gpu_registry[i] for i in range(min(200, len(gpu_registry)))]
 
 for i in range(NUM_ANOMALY_LABELS):
     gpu_id, _, _ = labeled_gpus[i % len(labeled_gpus)]
-    # Create 1-hour windows spread across the 30-day range
     window_start = BASE_TIME + timedelta(hours=rng.uniform(0, MAX_HOURS))
-    # ~5% anomaly rate
     is_anomaly = 1 if rng.random() < 0.05 else 0
     anomaly_rows.append((gpu_id, window_start, is_anomaly))
 
@@ -434,21 +401,17 @@ print(f"gpu_anomaly_labels: {df_anomaly_labels.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3f. Training Dataset (Joined Features + Labels)
+# MAGIC ### 2f. Training Dataset (Joined Features + Labels)
 # MAGIC
-# MAGIC We join the telemetry readings to the anomaly labels by matching each label's 1-hour window
-# MAGIC to telemetry rows within that window, then aggregate features per GPU per window.
+# MAGIC Joins telemetry to anomaly labels by matching each label's 1-hour window, then aggregates features per GPU per window.
 
 # COMMAND ----------
 
-# Read the tables we just created
 df_tel = spark.table("main.mlops_genai_workshop.gpu_telemetry")
 df_labels = spark.table("main.mlops_genai_workshop.gpu_anomaly_labels")
 
-# Define the 1-hour window end
 df_labels_with_end = df_labels.withColumn("window_end", F.col("window_start") + F.expr("INTERVAL 1 HOUR"))
 
-# Join telemetry to label windows: telemetry timestamp falls within [window_start, window_end)
 df_joined = df_labels_with_end.alias("l").join(
     df_tel.alias("t"),
     (F.col("t.gpu_id") == F.col("l.gpu_id")) &
@@ -457,7 +420,6 @@ df_joined = df_labels_with_end.alias("l").join(
     "left"
 )
 
-# Aggregate features per window
 df_training = df_joined.groupBy(
     F.col("l.gpu_id").alias("gpu_id"),
     F.col("l.window_start"),
@@ -484,14 +446,14 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Data Exploration
+# MAGIC ## Section 3: Data Exploration
 # MAGIC
-# MAGIC Let's verify the data loaded correctly with a series of exploration queries.
+# MAGIC Validate the generated data with summary queries.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4a. Cluster Inventory Overview
+# MAGIC ### 3a. Cluster Inventory
 
 # COMMAND ----------
 
@@ -501,7 +463,6 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Distribution by cloud provider
 # MAGIC SELECT
 # MAGIC   cloud_provider,
 # MAGIC   COUNT(*) AS cluster_count,
@@ -514,7 +475,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4b. Telemetry Summary
+# MAGIC ### 3b. Telemetry Summary
 
 # COMMAND ----------
 
@@ -533,7 +494,6 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Anomaly distribution in telemetry: readings with temp > 90C
 # MAGIC SELECT
 # MAGIC   CASE WHEN temp_celsius > 90 THEN 'anomalous' ELSE 'normal' END AS reading_type,
 # MAGIC   COUNT(*) AS count,
@@ -544,7 +504,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4c. Health Events Summary
+# MAGIC ### 3c. Health Events
 
 # COMMAND ----------
 
@@ -561,7 +521,6 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Top 5 most frequent error descriptions
 # MAGIC SELECT
 # MAGIC   event_type,
 # MAGIC   description,
@@ -574,7 +533,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4d. ML Job Runs Summary
+# MAGIC ### 3d. ML Job Runs
 
 # COMMAND ----------
 
@@ -595,7 +554,6 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Top 5 most expensive jobs
 # MAGIC SELECT job_id, cluster_id, framework, model_type, gpu_hours, cost_usd, status
 # MAGIC FROM main.mlops_genai_workshop.ml_job_runs
 # MAGIC ORDER BY cost_usd DESC
@@ -604,7 +562,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4e. Anomaly Labels Distribution
+# MAGIC ### 3e. Anomaly Labels
 
 # COMMAND ----------
 
@@ -620,7 +578,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4f. Training Dataset Preview
+# MAGIC ### 3f. Training Dataset
 
 # COMMAND ----------
 
@@ -636,7 +594,6 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Compare feature distributions between anomaly and normal windows
 # MAGIC SELECT
 # MAGIC   is_anomaly,
 # MAGIC   COUNT(*) AS window_count,
@@ -653,9 +610,7 @@ print(f"training_dataset: {df_training.count()} rows written")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Verify All Tables
-# MAGIC
-# MAGIC Final check: confirm all tables exist and show their row counts.
+# MAGIC ## Section 4: Verify All Tables
 
 # COMMAND ----------
 
@@ -678,17 +633,15 @@ print(f"training_dataset: {df_training.count()} rows written")
 # MAGIC %md
 # MAGIC ## Setup Complete
 # MAGIC
-# MAGIC All tables and volumes are ready. Here is what was created:
-# MAGIC
 # MAGIC | Asset | Type | Description |
 # MAGIC |-------|------|-------------|
 # MAGIC | `cluster_inventory` | Table | 30 DGX Cloud clusters across AWS, Azure, GCP, Oracle |
-# MAGIC | `gpu_telemetry` | Table | ~50K point-in-time GPU readings with ~5% anomaly injection |
-# MAGIC | `gpu_health_events` | Table | ~2K realistic GPU error/warning/critical events |
+# MAGIC | `gpu_telemetry` | Table | ~50K GPU readings with ~5% anomaly injection |
+# MAGIC | `gpu_health_events` | Table | ~2K warning / error / critical events |
 # MAGIC | `ml_job_runs` | Table | ~5K training jobs across PyTorch, TensorFlow, JAX |
-# MAGIC | `gpu_anomaly_labels` | Table | ~5K binary labels (~5% positive rate) for anomaly detection |
+# MAGIC | `gpu_anomaly_labels` | Table | ~5K binary labels (~5% positive rate) |
 # MAGIC | `training_dataset` | Table | Joined feature + label dataset for ML training |
-# MAGIC | `docs` | Volume | For documentation and reference materials |
-# MAGIC | `app_code` | Volume | For application code artifacts |
+# MAGIC | `docs` | Volume | Documentation and reference materials |
+# MAGIC | `app_code` | Volume | Application code artifacts |
 # MAGIC
 # MAGIC **Next:** Proceed to Block 2 for feature engineering and anomaly detection model training.

@@ -1,46 +1,26 @@
 # Databricks notebook source
 
 # MAGIC %md
-# MAGIC # Block 6: Advanced MLOps on Databricks with NVIDIA DGX Cloud
-# MAGIC **NVIDIA DGX Cloud MLOps & GenAI Workshop** | 60 min hands-on
+# MAGIC # Advanced MLOps on Databricks
+# MAGIC *From feature engineering to production monitoring -- the complete GPU anomaly detection lifecycle*
 # MAGIC
 # MAGIC ---
 # MAGIC
-# MAGIC ## Learning Objectives
-# MAGIC
-# MAGIC By the end of this notebook you will be able to:
-# MAGIC
-# MAGIC 1. **Feature Engineering** -- Build and populate a GPU health feature table in Unity Catalog with time-series primary keys
-# MAGIC 2. **Model Training & Registration** -- Train a LightGBM anomaly-detection model, log it with MLflow, and register it in Unity Catalog
-# MAGIC 3. **Model Serving** -- Deploy the registered model to a serverless serving endpoint with scale-to-zero
-# MAGIC 4. **Monitoring & Drift Detection** -- Attach Lakehouse Monitoring to model predictions, configure slicing expressions, and set up business-metric alerts
-# MAGIC
-# MAGIC ---
-# MAGIC
-# MAGIC ### Prerequisites
-# MAGIC
-# MAGIC | Requirement | Detail |
-# MAGIC |---|---|
-# MAGIC | Catalog | `main` |
-# MAGIC | Schema | `mlops_genai_workshop` |
-# MAGIC | Source table | `main.mlops_genai_workshop.gpu_telemetry` |
-# MAGIC | Training dataset | `main.mlops_genai_workshop.training_dataset` |
-# MAGIC | Cluster | Single-node or multi-node with ML Runtime 15.4+ |
+# MAGIC - **Part A** -- Build a GPU health feature table with time-series primary keys
+# MAGIC - **Part B** -- Train a LightGBM anomaly detector, register in Unity Catalog
+# MAGIC - **Part C** -- Deploy to a serverless serving endpoint with scale-to-zero
+# MAGIC - **Part D** -- Attach Lakehouse Monitoring for drift detection and custom alerts
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC ## Part A -- Feature Engineering (15 min)
-# MAGIC
-# MAGIC We will create a **feature table** that aggregates raw GPU telemetry into hourly windows.
-# MAGIC The table uses a **TIMESERIES primary key** so that Databricks Feature Store can perform
-# MAGIC point-in-time lookups automatically.
+# MAGIC ## Part A: Feature Engineering
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### A-1: Create the Feature Table with Unity Catalog Constraints
+# MAGIC ### A.1: Create Feature Table
+# MAGIC Hourly GPU health features with a `TIMESERIES` primary key for point-in-time lookups.
 
 # COMMAND ----------
 
@@ -66,21 +46,17 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### A-2: Populate the Feature Table from GPU Telemetry
+# MAGIC ### A.2: Populate Feature Table
+# MAGIC Aggregate raw telemetry into hourly windows with rolling error counts and utilization trends.
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-# ------------------------------------------------------------------
-# Read raw telemetry
-# ------------------------------------------------------------------
 telemetry_df = spark.table("main.mlops_genai_workshop.gpu_telemetry")
 
-# ------------------------------------------------------------------
 # Hourly aggregation
-# ------------------------------------------------------------------
 hourly_features = (
     telemetry_df
     .withColumn("window_start", F.date_trunc("hour", F.col("timestamp")))
@@ -96,9 +72,7 @@ hourly_features = (
     )
 )
 
-# ------------------------------------------------------------------
 # Rolling 24-hour error count
-# ------------------------------------------------------------------
 window_24h = (
     Window
     .partitionBy("gpu_id")
@@ -110,9 +84,7 @@ hourly_features = hourly_features.withColumn(
     "error_count_24h", F.sum("error_count_1h").over(window_24h)
 )
 
-# ------------------------------------------------------------------
-# Utilization trend (slope over last 6 hours using simple diff)
-# ------------------------------------------------------------------
+# Utilization trend (slope over last 6 hours)
 window_6h = (
     Window
     .partitionBy("gpu_id")
@@ -125,9 +97,7 @@ hourly_features = hourly_features.withColumn(
     F.col("avg_utilization") - F.first("avg_utilization").over(window_6h)
 )
 
-# ------------------------------------------------------------------
-# Write to the feature table (merge to avoid duplicates)
-# ------------------------------------------------------------------
+# Merge into feature table
 hourly_features.createOrReplaceTempView("new_features")
 
 spark.sql("""
@@ -144,17 +114,13 @@ display(spark.table("main.mlops_genai_workshop.gpu_health_features").limit(10))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC ## Part B -- Train & Register Model (15 min)
-# MAGIC
-# MAGIC We train a **LightGBM classifier** that predicts whether a GPU is exhibiting anomalous
-# MAGIC behaviour based on the features we just engineered. The model is logged with MLflow and
-# MAGIC registered in **Unity Catalog**.
+# MAGIC ## Part B: Train and Register Model
+# MAGIC LightGBM binary classifier for GPU anomaly detection, logged to MLflow and registered in Unity Catalog.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### B-1: Prepare Training Data
+# MAGIC ### B.1: Prepare Training Data
 
 # COMMAND ----------
 
@@ -165,14 +131,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-# ------------------------------------------------------------------
-# Set the MLflow registry to Unity Catalog
-# ------------------------------------------------------------------
 mlflow.set_registry_uri("databricks-uc")
 
-# ------------------------------------------------------------------
-# Load training dataset
-# ------------------------------------------------------------------
 training_df = spark.table("main.mlops_genai_workshop.training_dataset").toPandas()
 
 feature_columns = [
@@ -200,16 +160,13 @@ print(f"Anomaly rate (train): {y_train.mean():.2%}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### B-2: Train with LightGBM and Log to MLflow
+# MAGIC ### B.2: Train with LightGBM and Log to MLflow
 
 # COMMAND ----------
 
 model_name = "main.mlops_genai_workshop.gpu_anomaly_detector"
 
 with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
-    # ------------------------------------------------------------------
-    # Hyperparameters
-    # ------------------------------------------------------------------
     params = {
         "objective": "binary",
         "metric": "binary_logloss",
@@ -223,9 +180,6 @@ with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
     }
     mlflow.log_params(params)
 
-    # ------------------------------------------------------------------
-    # Train
-    # ------------------------------------------------------------------
     clf = lgb.LGBMClassifier(**params)
     clf.fit(
         X_train,
@@ -234,9 +188,6 @@ with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
         callbacks=[lgb.early_stopping(stopping_rounds=20), lgb.log_evaluation(50)],
     )
 
-    # ------------------------------------------------------------------
-    # Evaluate
-    # ------------------------------------------------------------------
     y_pred = clf.predict(X_test)
 
     metrics = {
@@ -249,9 +200,6 @@ with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}")
 
-    # ------------------------------------------------------------------
-    # Log & register model
-    # ------------------------------------------------------------------
     mlflow.lightgbm.log_model(
         clf,
         artifact_path="model",
@@ -265,7 +213,7 @@ with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### B-3: Set the Champion Alias
+# MAGIC ### B.3: Set the Champion Alias
 
 # COMMAND ----------
 
@@ -291,16 +239,13 @@ print(f"Set alias 'Champion' on version {latest_version} of {model_name}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC ## Part C -- Model Serving Endpoint (15 min)
-# MAGIC
-# MAGIC We deploy the Champion model to a **serverless model serving endpoint** with
-# MAGIC scale-to-zero enabled, then send a test request.
+# MAGIC ## Part C: Model Serving Endpoint
+# MAGIC Deploy the Champion model to a serverless endpoint with scale-to-zero and inference auto-capture.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### C-1: Create the Serving Endpoint
+# MAGIC ### C.1: Create the Serving Endpoint
 
 # COMMAND ----------
 
@@ -317,9 +262,6 @@ w = WorkspaceClient()
 endpoint_name = "gpu-anomaly-detector"
 served_model_name = "main.mlops_genai_workshop.gpu_anomaly_detector"
 
-# ------------------------------------------------------------------
-# Define endpoint configuration
-# ------------------------------------------------------------------
 endpoint_config = EndpointCoreConfigInput(
     served_entities=[
         ServedEntityInput(
@@ -336,9 +278,7 @@ endpoint_config = EndpointCoreConfigInput(
     ),
 )
 
-# ------------------------------------------------------------------
-# Create or update the endpoint
-# ------------------------------------------------------------------
+# Create or update
 try:
     existing = w.serving_endpoints.get(endpoint_name)
     print(f"Endpoint '{endpoint_name}' already exists -- updating configuration...")
@@ -354,9 +294,7 @@ except Exception:
         config=endpoint_config,
     )
 
-# ------------------------------------------------------------------
-# Wait for the endpoint to be ready
-# ------------------------------------------------------------------
+# Wait for ready state
 print("Waiting for endpoint to be ready (this may take a few minutes)...")
 
 for i in range(60):
@@ -374,24 +312,18 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### C-2: Test the Serving Endpoint
+# MAGIC ### C.2: Test the Serving Endpoint
 
 # COMMAND ----------
 
 import json
 
-# ------------------------------------------------------------------
-# Build a sample payload from test data
-# ------------------------------------------------------------------
 sample_records = X_test.head(3).to_dict(orient="records")
 payload = {"dataframe_records": sample_records}
 
 print("Request payload:")
 print(json.dumps(payload, indent=2))
 
-# ------------------------------------------------------------------
-# Query the endpoint
-# ------------------------------------------------------------------
 response = w.serving_endpoints.query(
     name=endpoint_name,
     dataframe_records=sample_records,
@@ -403,16 +335,13 @@ print(json.dumps(response.as_dict(), indent=2))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC ## Part D -- Lakehouse Monitoring & Drift Detection (15 min)
-# MAGIC
-# MAGIC We attach a **Quality Monitor** to the inference/predictions table to continuously
-# MAGIC track data drift, prediction drift, and custom business metrics.
+# MAGIC ## Part D: Lakehouse Monitoring and Drift Detection
+# MAGIC Attach a Quality Monitor to the inference table for continuous data/prediction drift tracking.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### D-1: Create the Lakehouse Monitor on Model Predictions
+# MAGIC ### D.1: Create the Lakehouse Monitor
 
 # COMMAND ----------
 
@@ -425,9 +354,6 @@ from databricks.sdk.service.catalog import (
 predictions_table = "main.mlops_genai_workshop.model_predictions"
 baseline_table = "main.mlops_genai_workshop.model_monitoring_baseline"
 
-# ------------------------------------------------------------------
-# Create the quality monitor
-# ------------------------------------------------------------------
 try:
     monitor = w.quality_monitors.create(
         table_name=predictions_table,
@@ -457,20 +383,14 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### D-2: Refresh the Monitor and View Drift Metrics
+# MAGIC ### D.2: Refresh the Monitor and View Drift Metrics
 
 # COMMAND ----------
 
-# ------------------------------------------------------------------
-# Trigger an initial refresh
-# ------------------------------------------------------------------
 print("Triggering monitor refresh...")
 w.quality_monitors.run_refresh(table_name=predictions_table)
 print("Refresh initiated. It may take a few minutes to complete.\n")
 
-# ------------------------------------------------------------------
-# Display drift metrics (profile table)
-# ------------------------------------------------------------------
 profile_table = f"{predictions_table}_profile_metrics"
 drift_table = f"{predictions_table}_drift_metrics"
 
@@ -480,7 +400,6 @@ print(f"Drift metrics table  : {drift_table}")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- View the latest profile metrics once the refresh completes
 # MAGIC SELECT
 # MAGIC   window,
 # MAGIC   column_name,
@@ -497,7 +416,6 @@ print(f"Drift metrics table  : {drift_table}")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- View drift metrics (compares current window to baseline)
 # MAGIC SELECT
 # MAGIC   window,
 # MAGIC   column_name,
@@ -513,13 +431,10 @@ print(f"Drift metrics table  : {drift_table}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### D-3: Custom Business Metric -- Anomaly Rate Alert (> 5%)
+# MAGIC ### D.3: Custom Business Metric -- Anomaly Rate Alert (> 5%)
 
 # COMMAND ----------
 
-# ------------------------------------------------------------------
-# Define a custom metric: anomaly rate per window
-# ------------------------------------------------------------------
 try:
     monitor_updated = w.quality_monitors.update(
         table_name=predictions_table,
@@ -549,7 +464,6 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Check the anomaly rate metric per window and alert on > 5%
 # MAGIC SELECT
 # MAGIC   window,
 # MAGIC   slice_key,
@@ -578,7 +492,7 @@ except Exception as e:
 # MAGIC | **D** | Lakehouse monitoring with drift detection | Quality Monitors, slicing, custom metrics |
 # MAGIC
 # MAGIC ### Next Steps
-# MAGIC - Set up **SQL alerts** on the anomaly rate metric to trigger PagerDuty/Slack notifications
-# MAGIC - Build a **Databricks AI/BI dashboard** to visualize drift trends over time
-# MAGIC - Explore **A/B testing** by deploying a Challenger model alongside the Champion
-# MAGIC - Connect the feature table to **real-time DGX Cloud telemetry** via Lakeflow Connect
+# MAGIC - Set up SQL alerts on the anomaly rate metric to trigger PagerDuty/Slack notifications
+# MAGIC - Build a Databricks AI/BI dashboard to visualize drift trends over time
+# MAGIC - Deploy a Challenger model alongside the Champion for A/B testing
+# MAGIC - Connect the feature table to real-time DGX Cloud telemetry via Lakeflow Connect
