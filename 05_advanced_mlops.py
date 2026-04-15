@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # Advanced MLOps on Databricks
 # MAGIC *From feature engineering to production monitoring -- the complete GPU anomaly detection lifecycle*
@@ -64,37 +63,19 @@ hourly_features = (
     .agg(
         F.avg("temp_celsius").alias("avg_temp"),
         F.max("temp_celsius").alias("max_temp"),
+        F.min("temp_celsius").alias("min_temp"),
         F.avg("utilization_pct").alias("avg_utilization"),
         F.avg(F.col("memory_used_gb") / 80.0 * 100).alias("avg_memory_pct"),
         F.avg("power_watts").alias("avg_power"),
         F.sum("error_count").alias("error_count_1h"),
-        F.variance("temp_celsius").alias("temp_variance"),
+        F.stddev("temp_celsius").alias("temp_stddev"),
+        (F.sum(F.when(F.col("temp_celsius") > 80, 1).otherwise(0)) / F.count("temp_celsius")).alias("high_temp_pct"),
     )
 )
 
-# Rolling 24-hour error count
-window_24h = (
-    Window
-    .partitionBy("gpu_id")
-    .orderBy(F.col("window_start").cast("long"))
-    .rangeBetween(-23 * 3600, 0)
-)
-
+# Compute derived features
 hourly_features = hourly_features.withColumn(
-    "error_count_24h", F.sum("error_count_1h").over(window_24h)
-)
-
-# Utilization trend (slope over last 6 hours)
-window_6h = (
-    Window
-    .partitionBy("gpu_id")
-    .orderBy("window_start")
-    .rowsBetween(-5, 0)
-)
-
-hourly_features = hourly_features.withColumn(
-    "util_trend",
-    F.col("avg_utilization") - F.first("avg_utilization").over(window_6h)
+    "temp_range", F.col("max_temp") - F.col("min_temp")
 )
 
 # Merge into feature table
@@ -148,13 +129,14 @@ training_df = training_spark_df.toPandas()
 feature_columns = [
     "avg_temp",
     "max_temp",
+    "min_temp",
     "avg_utilization",
     "avg_memory_pct",
     "avg_power",
     "error_count_1h",
-    "error_count_24h",
-    "temp_variance",
-    "util_trend",
+    "temp_stddev",
+    "temp_range",
+    "high_temp_pct",
 ]
 
 X = training_df[feature_columns]
@@ -233,11 +215,8 @@ from mlflow import MlflowClient
 client = MlflowClient()
 
 # Get the latest version just registered
-latest_version = client.search_model_versions(
-    f"name='{model_name}'",
-    order_by=["version_number DESC"],
-    max_results=1,
-)[0].version
+versions = client.search_model_versions(f"name='{model_name}'")
+latest_version = max(int(v.version) for v in versions)
 
 client.set_registered_model_alias(
     name=model_name,
@@ -264,7 +243,6 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
     EndpointCoreConfigInput,
     ServedEntityInput,
-    AutoCaptureConfigInput,
 )
 import time
 
@@ -282,11 +260,6 @@ endpoint_config = EndpointCoreConfigInput(
             scale_to_zero_enabled=True,
         )
     ],
-    auto_capture_config=AutoCaptureConfigInput(
-        catalog_name="main",
-        schema_name="mlops_genai_workshop",
-        enabled=True,
-    ),
 )
 
 # Create or update
@@ -296,7 +269,6 @@ try:
     w.serving_endpoints.update_config(
         name=endpoint_name,
         served_entities=endpoint_config.served_entities,
-        auto_capture_config=endpoint_config.auto_capture_config,
     )
 except Exception:
     print(f"Creating endpoint '{endpoint_name}'...")
@@ -356,6 +328,43 @@ print(json.dumps(response.as_dict(), indent=2))
 
 # COMMAND ----------
 
+from pyspark.sql.functions import col, rand, lit, expr, concat
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, TimestampType
+
+# Define schema for baseline table
+baseline_schema = StructType([
+    StructField("prediction_timestamp", TimestampType(), True),
+    StructField("cluster_id", StringType(), True),
+    StructField("gpu_type", StringType(), True),
+    StructField("avg_temp", DoubleType(), True),
+    StructField("avg_utilization", DoubleType(), True),
+    StructField("prediction", IntegerType(), True),
+])
+
+# Generate synthetic baseline data
+baseline_spark_df = (
+    spark.range(100)
+    .withColumn("prediction_timestamp", expr("timestampadd(HOUR, id, '2026-04-01 00:00:00')"))
+    .withColumn("cluster_id", concat(lit("cluster_"), ((col("id") % 3) + 1).cast("string")))
+    .withColumn("gpu_type", lit("A100") )
+    .withColumn("avg_temp", (rand() * 20 + 60))
+    .withColumn("avg_utilization", (rand() * 0.5 + 0.5))
+    .withColumn("prediction", (rand() > 0.95).cast("int"))
+    .select(
+        "prediction_timestamp",
+        "cluster_id",
+        "gpu_type",
+        "avg_temp",
+        "avg_utilization",
+        "prediction"
+    )
+)
+
+baseline_spark_df.write.mode("overwrite").saveAsTable("main.mlops_genai_workshop.model_monitoring_baseline")
+print("Synthetic baseline table 'main.mlops_genai_workshop.model_monitoring_baseline' created.")
+
+# COMMAND ----------
+
 from databricks.sdk.service.catalog import (
     MonitorTimeSeries,
     MonitorMetric,
@@ -391,6 +400,7 @@ except Exception as e:
     else:
         raise e
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -407,6 +417,13 @@ drift_table = f"{predictions_table}_drift_metrics"
 
 print(f"Profile metrics table: {profile_table}")
 print(f"Drift metrics table  : {drift_table}")
+
+# COMMAND ----------
+
+spark.sql("""
+ALTER TABLE main.mlops_genai_workshop.model_predictions
+SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
+""")
 
 # COMMAND ----------
 

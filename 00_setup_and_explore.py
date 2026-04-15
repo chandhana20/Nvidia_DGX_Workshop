@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # NVIDIA DGX Cloud -- MLOps & GenAI Workshop
 # MAGIC
@@ -24,6 +23,11 @@
 
 # MAGIC %sql
 # MAGIC CREATE SCHEMA IF NOT EXISTS main.mlops_genai_workshop;
+
+# COMMAND ----------
+
+# DBTITLE 1,Set active schema
+# MAGIC %sql
 # MAGIC USE SCHEMA main.mlops_genai_workshop;
 
 # COMMAND ----------

@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # GenAI Foundations on Databricks
 # MAGIC *Built-in AI functions, Claude via SQL, and natural-language-to-SQL -- all without deploying a model.*

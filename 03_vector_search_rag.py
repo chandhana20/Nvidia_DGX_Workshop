@@ -1,5 +1,4 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # Vector Search, RAG & Knowledge Assistants
 # MAGIC *Build a retrieval-augmented operations advisor for DGX Cloud fleets.*
@@ -49,8 +48,8 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA}.{VOLUME}")
 
 # COMMAND ----------
 
-%pip install fpdf2 --quiet
-dbutils.library.restartPython()
+# MAGIC %pip install fpdf2 --quiet
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
@@ -213,8 +212,8 @@ display(dbutils.fs.ls(f"dbfs:{VOLUME_PATH}"))
 
 # COMMAND ----------
 
-%pip install pypdf --quiet
-dbutils.library.restartPython()
+# MAGIC %pip install pypdf --quiet
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
