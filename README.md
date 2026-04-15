@@ -24,7 +24,9 @@
 | 05 | `05_advanced_mlops.py` | Feature engineering, MLflow training, UC Model Registry, serving, monitoring |
 | 06 | `06_end_to_end_demo.py` | Full E2E pipeline demo combining all components |
 
-## Use Case
+## Data
+
+GPU fleet data sourced from: https://github.com/andrew-nicholls_data/nvidia-dgx-workshop/tree/main/data
 
 GPU anomaly detection on a synthetic NVIDIA DGX Cloud fleet:
 - 30 clusters across AWS, Azure, GCP, Oracle
@@ -38,3 +40,4 @@ GPU anomaly detection on a synthetic NVIDIA DGX Cloud fleet:
 - Claude Code + Databricks CLI authenticated
 - SQL Warehouse running
 - ML Runtime 15.4+ cluster (for MLflow notebooks)
+- Data from https://github.com/andrew-nicholls_data/nvidia-dgx-workshop/tree/main/data
