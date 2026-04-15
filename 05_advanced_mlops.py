@@ -62,13 +62,13 @@ hourly_features = (
     .withColumn("window_start", F.date_trunc("hour", F.col("timestamp")))
     .groupBy("gpu_id", "window_start")
     .agg(
-        F.avg("temperature").alias("avg_temp"),
-        F.max("temperature").alias("max_temp"),
-        F.avg("utilization").alias("avg_utilization"),
-        F.avg("memory_pct").alias("avg_memory_pct"),
-        F.avg("power_draw").alias("avg_power"),
-        F.sum(F.when(F.col("error_flag") == 1, 1).otherwise(0)).alias("error_count_1h"),
-        F.variance("temperature").alias("temp_variance"),
+        F.avg("temp_celsius").alias("avg_temp"),
+        F.max("temp_celsius").alias("max_temp"),
+        F.avg("utilization_pct").alias("avg_utilization"),
+        F.avg(F.col("memory_used_gb") / 80.0 * 100).alias("avg_memory_pct"),
+        F.avg("power_watts").alias("avg_power"),
+        F.sum("error_count").alias("error_count_1h"),
+        F.variance("temp_celsius").alias("temp_variance"),
     )
 )
 
@@ -133,7 +133,17 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 
 mlflow.set_registry_uri("databricks-uc")
 
-training_df = spark.table("main.mlops_genai_workshop.training_dataset").toPandas()
+# Build training data by joining the feature table with anomaly labels
+features_df = spark.table("main.mlops_genai_workshop.gpu_health_features")
+labels_df = spark.table("main.mlops_genai_workshop.gpu_anomaly_labels")
+
+training_spark_df = features_df.join(
+    labels_df,
+    on=["gpu_id", "window_start"],
+    how="inner"
+).na.fill(0)
+
+training_df = training_spark_df.toPandas()
 
 feature_columns = [
     "avg_temp",
@@ -165,6 +175,7 @@ print(f"Anomaly rate (train): {y_train.mean():.2%}")
 # COMMAND ----------
 
 model_name = "main.mlops_genai_workshop.gpu_anomaly_detector"
+mlflow.set_experiment("/Users/" + spark.sql("SELECT current_user()").first()[0] + "/gpu-anomaly-detection-workshop")
 
 with mlflow.start_run(run_name="gpu_anomaly_lgbm") as run:
     params = {
